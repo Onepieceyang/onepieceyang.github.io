@@ -1,0 +1,233 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>证券计费计息系统的状态机与资金安全设计 | Yang</title><meta name="author" content="郭洋"><meta name="copyright" content="郭洋"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="富途证券收费计息系统的核心链路：计息 → 资金冻结 → 扣费 → 解冻。每一步都在动钱，任何一个环节失败都不能留下不一致的账。这篇文章记录这条链路的设计思路。 为什么是状态机计费订单从创建到终结，每个订单在任意时刻只能处于一个明确状态： 123INIT → INTEREST_ACCRUED → FROZEN → CHARGED → UNFROZEN → DONE         │">
+<meta property="og:type" content="article">
+<meta property="og:title" content="证券计费计息系统的状态机与资金安全设计">
+<meta property="og:url" content="https://onepieceyang.github.io/2026/11/02/billing-state-machine/index.html">
+<meta property="og:site_name" content="Yang">
+<meta property="og:description" content="富途证券收费计息系统的核心链路：计息 → 资金冻结 → 扣费 → 解冻。每一步都在动钱，任何一个环节失败都不能留下不一致的账。这篇文章记录这条链路的设计思路。 为什么是状态机计费订单从创建到终结，每个订单在任意时刻只能处于一个明确状态： 123INIT → INTEREST_ACCRUED → FROZEN → CHARGED → UNFROZEN → DONE         │">
+<meta property="og:locale" content="zh_CN">
+<meta property="article:published_time" content="2026-11-02T02:30:00.000Z">
+<meta property="article:modified_time" content="2026-11-02T06:14:56.496Z">
+<meta property="article:author" content="郭洋">
+<meta property="article:tag" content="Go">
+<meta property="article:tag" content="分布式">
+<meta property="article:tag" content="后端">
+<meta property="article:tag" content="账务">
+<meta name="twitter:card" content="summary"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "证券计费计息系统的状态机与资金安全设计",
+  "url": "https://onepieceyang.github.io/2026/11/02/billing-state-machine/",
+  "image": "",
+  "datePublished": "2026-11-02T02:30:00.000Z",
+  "dateModified": "2026-11-02T06:14:56.496Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "郭洋",
+      "url": "https://onepieceyang.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/favicon.png"><link rel="canonical" href="https://onepieceyang.github.io/2026/11/02/billing-state-machine/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.7.0"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.1/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        const data = { value }
+
+        if (ttl != null) {
+          data.expiry = Date.now() + ttl * 86400000
+        }
+
+        localStorage.setItem(key, JSON.stringify(data))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return
+
+        try {
+          const data = JSON.parse(itemStr)
+
+          if (data.expiry && Date.now() > data.expiry) {
+            localStorage.removeItem(key)
+            return
+          }
+
+          return data.value
+        } catch {
+          localStorage.removeItem(key)
+        }
+      }
+    }
+
+    const scriptCache = new Map()
+    const cssCache = new Map()
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => {
+        if (scriptCache.has(url)) {
+          return scriptCache.get(url)
+        }
+
+        const promise = new Promise((resolve, reject) => {
+          const script = document.createElement('script')
+
+          script.src = url
+          script.async = true
+
+          for (const key in attr) {
+            script.setAttribute(key, attr[key])
+          }
+
+          script.onload = resolve
+          script.onerror = reject
+
+          document.head.appendChild(script)
+        })
+
+        scriptCache.set(url, promise)
+
+        return promise
+      },
+      getCSS: (url, id) => {
+        if (cssCache.has(url)) {
+          return cssCache.get(url)
+        }
+
+        const promise = new Promise((resolve, reject) => {
+          const link = document.createElement('link')
+
+          link.rel = 'stylesheet'
+          link.href = url
+
+          if (id) {
+            link.id = id
+          }
+
+          link.onload = resolve
+          link.onerror = reject
+
+          document.head.appendChild(link)
+        })
+
+        cssCache.set(url, promise)
+
+        return promise
+      },
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const metaThemeColor = document.querySelector('meta[name="theme-color"]')
+      const activateDarkMode = () => {
+        document.documentElement.dataset.theme = 'dark'
+        if (metaThemeColor !== null) {
+          metaThemeColor.setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.dataset.theme = 'light'
+        if (metaThemeColor !== null) {
+          metaThemeColor.setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: undefined,
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.13.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: false,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '证券计费计息系统的状态机与资金安全设计',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.1.2"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="/null" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">3</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">13</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">0</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><a class="site-page" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-user"></i><span> 关于我</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="not-top-img" id="page-header"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Yang</span></a><a class="nav-page-title" href="/"><span class="site-name">证券计费计息系统的状态机与资金安全设计</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><a class="site-page" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-user"></i><span> 关于我</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav></header><main class="layout" id="content-inner"><div id="post"><div id="post-info"><h1 class="post-title">证券计费计息系统的状态机与资金安全设计</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-02T02:30:00.000Z" title="发表于 2026-11-02 10:30:00">2026-11-02</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-02T06:14:56.496Z" title="更新于 2026-11-02 14:14:56">2026-11-02</time></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div><article class="container post-content" id="article-container"><p>富途证券收费计息系统的核心链路：计息 → 资金冻结 → 扣费 → 解冻。每一步都在动钱，任何一个环节失败都不能留下不一致的账。这篇文章记录这条链路的设计思路。</p>
+<h2 id="为什么是状态机"><a href="#为什么是状态机" class="headerlink" title="为什么是状态机"></a>为什么是状态机</h2><p>计费订单从创建到终结，每个订单在任意时刻只能处于一个明确状态：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">INIT → INTEREST_ACCRUED → FROZEN → CHARGED → UNFROZEN → DONE</span><br><span class="line">         │                  │         │</span><br><span class="line">         └── 失败 ──────────┴─────────┴──&gt; FAILED → 补偿 → 重试</span><br></pre></td></tr></table></figure>
+
+<p>状态机解决了两个问题：</p>
+<ol>
+<li><strong>每一步迁移前置条件明确</strong>。扣费只允许从 <code>FROZEN</code> 迁出，没冻结就扣费属于系统 bug，直接告警。</li>
+<li><strong>异常恢复有据可查</strong>。<code>FAILED</code> 状态的订单记录失败发生在哪一步，补偿任务按步重放，不重头再来。</li>
+</ol>
+<h2 id="月末大批量计费的-WorkerPool-优化"><a href="#月末大批量计费的-WorkerPool-优化" class="headerlink" title="月末大批量计费的 WorkerPool 优化"></a>月末大批量计费的 WorkerPool 优化</h2><p>月末计息是集中爆发的批处理，几百万账户要在一夜之内算完。最初的实现是每个 goroutine 各自拿 MySQL 连接写库，高峰期数据库连接池被打满，任务互相争抢。</p>
+<p>改法是 WorkerPool 固定并发度：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">pool := NewWorkerPool(workerCount, dbPoolSize)</span><br><span class="line">pool.Submit(task)</span><br></pre></td></tr></table></figure>
+
+<ul>
+<li><strong>worker 数与 DB 连接数配比固定</strong>，避免 goroutine 数量失控拖垮连接池。</li>
+<li><strong>任务粒度按账户拆分</strong>，单个账户计费失败不影响整批，失败账户进重试队列。</li>
+<li><strong>幂等控制</strong>：每笔订单带唯一业务号，重试前先查状态，已完成直接跳过。</li>
+</ul>
+<p>配合失败补偿与告警体系，批处理任务从”跑完才知道错”变成”错一笔报一笔”。</p>
+<h2 id="新旧接口双读对账"><a href="#新旧接口双读对账" class="headerlink" title="新旧接口双读对账"></a>新旧接口双读对账</h2><p>风控接口迁移时新旧系统并行。做法是双读：请求同时打到新旧两个接口，以旧接口结果为准写库，新接口结果留档比对。对账任务按日跑批，差异超阈值即告警。对账稳定后再切流，数据一致性有完整证据链。</p>
+<h2 id="时态快照模型：期权计费迁移"><a href="#时态快照模型：期权计费迁移" class="headerlink" title="时态快照模型：期权计费迁移"></a>时态快照模型：期权计费迁移</h2><p>港股期权从 Python 迁 Go，难点在计费依据是”当时看到的费率”，不是”现在的费率”。时态快照模型把每个计费时点的费率、持仓、规则版本固化成快照：</p>
+<ul>
+<li><strong>双跑对账</strong>：新旧系统同时消费同一事件流，各自产出账单，逐字段比对。</li>
+<li><strong>灰度切流</strong>：按客户维度小流量切换，出问题即时回切。</li>
+<li><strong>试算与真实扣费严格隔离</strong>：试算链路只读，扣费链路独立部署独立权限，防止试算逻辑误触资金。</li>
+</ul>
+<p>迁移全程业务无感知。</p>
+<h2 id="写在最后"><a href="#写在最后" class="headerlink" title="写在最后"></a>写在最后</h2><p>计费系统的所有设计最终指向一件事：<strong>每一分钱的变化都有迹可循</strong>。状态机保证顺序，幂等保证不重复，对账保证不错账，快照保证可回溯。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://onepieceyang.github.io">郭洋</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://onepieceyang.github.io/2026/11/02/billing-state-machine/">https://onepieceyang.github.io/2026/11/02/billing-state-machine/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://onepieceyang.github.io" target="_blank">Yang</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Go/">Go</a><a class="post-meta__tags" href="/tags/%E5%90%8E%E7%AB%AF/">后端</a><a class="post-meta__tags" href="/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式</a><a class="post-meta__tags" href="/tags/%E8%B4%A6%E5%8A%A1/">账务</a></div><div class="post-share"><div class="social-share" data-image="/null" data-sites="facebook,x,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/02/docker-lakehouse/" title="用 Docker Compose 在本地复现一个湖仓"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">用 Docker Compose 在本地复现一个湖仓</div></div><div class="info-2"><div class="info-item-1">湖仓（Lakehouse）的卖点一句话能说清：存储与计算解耦、ACID 事务、多引擎读写。但只看文档不动手很难有体感。这个项目用 Docker Compose 把 MinIO + Hive Metastore + Iceberg + Spark + Trino 一键拉起来，本地复现一套最小湖仓。 架构123456┌─────────────┐     ┌──────────────┐     ┌──────────────┐│   MinIO     │ ←── │ HiveMetastore│ ←── │  Spark / Trino││   (S3)      │     │  (元数据)     │     │  (计算引擎)    │└─────────────┘     └──────────────┘     └──────────────┘       ▲                                         │       └──────────── Parquet + Iceberg ──────────┘   MinIO 提供 S3 ...</div></div></div></a></nav></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="/null" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">郭洋</div><div class="author-info-description"><div>后端工程师 · 富途</div> <div>金融账务系统 · 数据工程</div></div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">3</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">13</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">0</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/xxxxxx"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Onepieceyang" target="_blank" title="Github"><i class="fab fa-github"></i></a><a class="social-icon" href="mailto:mark13612911661@163.com" target="_blank" title="Email"><i class="fas fa-envelope"></i></a></div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E6%98%AF%E7%8A%B6%E6%80%81%E6%9C%BA"><span class="toc-number">1.</span> <span class="toc-text">为什么是状态机</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9C%88%E6%9C%AB%E5%A4%A7%E6%89%B9%E9%87%8F%E8%AE%A1%E8%B4%B9%E7%9A%84-WorkerPool-%E4%BC%98%E5%8C%96"><span class="toc-number">2.</span> <span class="toc-text">月末大批量计费的 WorkerPool 优化</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%96%B0%E6%97%A7%E6%8E%A5%E5%8F%A3%E5%8F%8C%E8%AF%BB%E5%AF%B9%E8%B4%A6"><span class="toc-number">3.</span> <span class="toc-text">新旧接口双读对账</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%97%B6%E6%80%81%E5%BF%AB%E7%85%A7%E6%A8%A1%E5%9E%8B%EF%BC%9A%E6%9C%9F%E6%9D%83%E8%AE%A1%E8%B4%B9%E8%BF%81%E7%A7%BB"><span class="toc-number">4.</span> <span class="toc-text">时态快照模型：期权计费迁移</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%86%99%E5%9C%A8%E6%9C%80%E5%90%8E"><span class="toc-number">5.</span> <span class="toc-text">写在最后</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/02/player-observability/" title="从零搭建播放器全链路可观测性：日均 TB 级日志的诊断体系">从零搭建播放器全链路可观测性：日均 TB 级日志的诊断体系</a><time datetime="2026-11-02T03:30:00.000Z" title="发表于 2026-11-02 11:30:00">2026-11-02</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/02/docker-lakehouse/" title="用 Docker Compose 在本地复现一个湖仓">用 Docker Compose 在本地复现一个湖仓</a><time datetime="2026-11-02T03:00:00.000Z" title="发表于 2026-11-02 11:00:00">2026-11-02</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/02/billing-state-machine/" title="证券计费计息系统的状态机与资金安全设计">证券计费计息系统的状态机与资金安全设计</a><time datetime="2026-11-02T02:30:00.000Z" title="发表于 2026-11-02 10:30:00">2026-11-02</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2026 By 郭洋</span><span class="framework-info"><span>框架 </span><a target="_blank" rel="noopener" href="https://hexo.io">Hexo 8.1.2</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.7.0</a></span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.7.0"></script><script src="/js/main.js?v=5.7.0"></script><div class="js-pjax"></div><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script></div></body></html>
